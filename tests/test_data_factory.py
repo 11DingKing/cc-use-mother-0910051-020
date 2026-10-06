@@ -143,7 +143,9 @@ class DataFactory:
 
     def create_alternative_material(self, material_code: str, alt_material_code: str,
                                     priority: int = 1, is_active: bool = True,
-                                    remark: str = None):
+                                    remark: str = None,
+                                    substitution_ratio: float = 1.0,
+                                    max_substitution_percent: int = 100):
         mat_id = self.materials[material_code].id
         alt_mat_id = self.materials[alt_material_code].id
         existing = crud_alternative_material.get_by_materials(self.db, mat_id, alt_mat_id)
@@ -152,7 +154,9 @@ class DataFactory:
                 self.db,
                 obj_in=AlternativeMaterialCreate(
                     material_id=mat_id, alternative_material_id=alt_mat_id,
-                    priority=priority, is_active=is_active, remark=remark
+                    priority=priority, is_active=is_active, remark=remark,
+                    substitution_ratio=substitution_ratio,
+                    max_substitution_percent=max_substitution_percent
                 )
             )
             self.alternatives[f"{material_code}_{alt_material_code}"] = alt

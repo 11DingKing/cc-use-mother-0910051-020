@@ -3,6 +3,7 @@ from typing import Optional
 from app.crud.purchase import crud_inspection, crud_inventory_batch, crud_delivery
 from app.schemas import InspectionCreate, InventoryBatchCreate
 from app.models import Inspection, InventoryBatch
+from app.services.allocation import AllocationService
 
 class InspectionService:
     @staticmethod
@@ -35,6 +36,9 @@ class InspectionService:
             location="待处理区" if is_quarantined else "合格区",
         )
         crud_inventory_batch.create(db, obj_in=batch_in)
+        AllocationService.validate_confirmed_plans(
+            db, trigger="inventory_changed", material_ids=[delivery.material_id]
+        )
         return inspection
 
     @staticmethod
@@ -48,7 +52,7 @@ class InspectionService:
             raise ValueError(f"库存批次不存在: {inventory_batch_id}")
         if not batch.is_quarantined:
             raise ValueError("该批次未被隔离")
-        return crud_inventory_batch.update(
+        updated = crud_inventory_batch.update(
             db,
             db_obj=batch,
             obj_in={
@@ -58,6 +62,10 @@ class InspectionService:
                 "location": "合格区"
             }
         )
+        AllocationService.validate_confirmed_plans(
+            db, trigger="inventory_changed", material_ids=[batch.material_id]
+        )
+        return updated
 
     @staticmethod
     def reject_quarantined_batch(
@@ -68,7 +76,7 @@ class InspectionService:
         batch = crud_inventory_batch.get(db, inventory_batch_id)
         if not batch:
             raise ValueError(f"库存批次不存在: {inventory_batch_id}")
-        return crud_inventory_batch.update(
+        updated = crud_inventory_batch.update(
             db,
             db_obj=batch,
             obj_in={
@@ -78,6 +86,10 @@ class InspectionService:
                 "location": "不合格品区"
             }
         )
+        AllocationService.validate_confirmed_plans(
+            db, trigger="inventory_changed", material_ids=[batch.material_id]
+        )
+        return updated
 
     @staticmethod
     def can_use_batch(db: Session, inventory_batch_id: int) -> bool:
@@ -108,4 +120,7 @@ class InspectionService:
                 obj_in={"available_quantity": new_available}
             )
             remaining -= consume_qty
+        AllocationService.validate_confirmed_plans(
+            db, trigger="inventory_changed", material_ids=[material_id]
+        )
         return True

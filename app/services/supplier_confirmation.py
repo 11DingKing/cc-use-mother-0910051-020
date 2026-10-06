@@ -105,6 +105,10 @@ class SupplierConfirmationService:
         if shortage_qty > 0:
             SupplierConfirmationService._recalculate_shortage_impact(db, confirmation_id)
         SupplierConfirmationService._sync_delay_impact_with_supplier(db, confirmation_id)
+        from app.services.allocation import AllocationService
+        AllocationService.validate_confirmed_plans(
+            db, trigger="supply_promise_updated", material_ids=[confirmation.material_id]
+        )
         return crud_supplier_confirmation.get(db, confirmation_id)
 
     @staticmethod

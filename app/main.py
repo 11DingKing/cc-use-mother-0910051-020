@@ -1,11 +1,33 @@
 from fastapi import FastAPI
+from sqlalchemy import inspect, text
 from app.config import settings
 from app.database import engine, Base, get_db
 from app.routers import materials, vehicles, suppliers, purchase, alternatives, statistics
-from app.routers import supplier_confirmations
+from app.routers import supplier_confirmations, allocations
 from app.data.seed import seed_all
 
 Base.metadata.create_all(bind=engine)
+
+
+def _run_lightweight_migrations():
+    """为已有数据库补充新增列（create_all 不会修改已存在的表）"""
+    inspector = inspect(engine)
+    if "alternative_materials" in inspector.get_table_names():
+        columns = {c["name"] for c in inspector.get_columns("alternative_materials")}
+        with engine.begin() as conn:
+            if "substitution_ratio" not in columns:
+                conn.execute(text(
+                    "ALTER TABLE alternative_materials "
+                    "ADD COLUMN substitution_ratio FLOAT DEFAULT 1.0"
+                ))
+            if "max_substitution_percent" not in columns:
+                conn.execute(text(
+                    "ALTER TABLE alternative_materials "
+                    "ADD COLUMN max_substitution_percent INTEGER DEFAULT 100"
+                ))
+
+
+_run_lightweight_migrations()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -20,6 +42,7 @@ app.include_router(purchase.router, prefix=settings.API_V1_STR)
 app.include_router(alternatives.router, prefix=settings.API_V1_STR)
 app.include_router(statistics.router, prefix=settings.API_V1_STR)
 app.include_router(supplier_confirmations.router, prefix=settings.API_V1_STR)
+app.include_router(allocations.router, prefix=settings.API_V1_STR)
 
 @app.on_event("startup")
 def startup_event():

@@ -176,6 +176,8 @@ class AlternativeMaterial(Base):
     material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
     alternative_material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
     priority = Column(Integer, default=1)
+    substitution_ratio = Column(Float, default=1.0)
+    max_substitution_percent = Column(Integer, default=100)
     is_active = Column(Boolean, default=True)
     remark = Column(String(300))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -275,3 +277,85 @@ class SupplierShortageImpact(Base):
     production_batch = relationship("ProductionBatch")
     vehicle_model = relationship("VehicleModel")
     material = relationship("Material")
+
+class AllocationPlan(Base):
+    """替代料分配方案：把主料及替代料的可用库存/在途分配到具体生产批次。
+    草稿不占用库存；确认后冻结，库存变化只生成差异建议。"""
+    __tablename__ = "allocation_plans"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_no = Column(String(50), unique=True, index=True, nullable=False)
+    name = Column(String(100))
+    strategy = Column(String(30), nullable=False, default="priority_first")
+    status = Column(String(20), default="draft")
+    version = Column(Integer, default=1, nullable=False)
+    created_by = Column(String(50))
+    confirmed_by = Column(String(50))
+    confirmed_at = Column(DateTime(timezone=True))
+    remark = Column(Text)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    items = relationship("AllocationPlanItem", back_populates="plan", cascade="all, delete-orphan")
+    lines = relationship("AllocationLine", back_populates="plan", cascade="all, delete-orphan")
+    diff_suggestions = relationship("AllocationDiffSuggestion", back_populates="plan", cascade="all, delete-orphan")
+
+class AllocationPlanItem(Base):
+    """方案明细：一个生产批次对一种物料的需求分配结果"""
+    __tablename__ = "allocation_plan_items"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("allocation_plans.id"), nullable=False)
+    production_batch_id = Column(Integer, ForeignKey("production_batches.id"), nullable=False)
+    vehicle_model_id = Column(Integer, ForeignKey("vehicle_models.id"), nullable=False)
+    material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    required_quantity = Column(Integer, nullable=False)
+    allocated_main_quantity = Column(Integer, default=0)
+    allocated_alt_quantity = Column(Integer, default=0)
+    unmet_quantity = Column(Integer, default=0)
+    status = Column(String(30), default="unmet")
+    item_status = Column(String(20), default="draft")
+    unmet_reason = Column(Text)
+    estimated_delay_days = Column(Integer)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    plan = relationship("AllocationPlan", back_populates="items")
+    production_batch = relationship("ProductionBatch")
+    vehicle_model = relationship("VehicleModel")
+    material = relationship("Material")
+    lines = relationship("AllocationLine", back_populates="plan_item", cascade="all, delete-orphan")
+
+class AllocationLine(Base):
+    """分配行：具体库存批次或在途订单分配到具体生产批次"""
+    __tablename__ = "allocation_lines"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("allocation_plans.id"), nullable=False)
+    plan_item_id = Column(Integer, ForeignKey("allocation_plan_items.id"), nullable=False)
+    production_batch_id = Column(Integer, ForeignKey("production_batches.id"), nullable=False)
+    source_type = Column(String(20), nullable=False)
+    inventory_batch_id = Column(Integer, ForeignKey("inventory_batches.id"))
+    purchase_order_id = Column(Integer, ForeignKey("purchase_orders.id"))
+    material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    is_alternative = Column(Boolean, default=False)
+    quantity = Column(Integer, nullable=False)
+    main_equivalent = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), default="draft")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    plan = relationship("AllocationPlan", back_populates="lines")
+    plan_item = relationship("AllocationPlanItem", back_populates="lines")
+    production_batch = relationship("ProductionBatch")
+    material = relationship("Material")
+    inventory_batch = relationship("InventoryBatch")
+    purchase_order = relationship("PurchaseOrder")
+
+class AllocationDiffSuggestion(Base):
+    """差异建议：已确认方案遇到库存变化或供应承诺更新时生成，不改写已确认结果"""
+    __tablename__ = "allocation_diff_suggestions"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("allocation_plans.id"), nullable=False)
+    change_type = Column(String(30), nullable=False)
+    description = Column(String(500))
+    detail = Column(Text)
+    status = Column(String(20), default="open")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    plan = relationship("AllocationPlan", back_populates="diff_suggestions")

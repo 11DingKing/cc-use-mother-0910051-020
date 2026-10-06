@@ -239,6 +239,8 @@ class AlternativeMaterialBase(BaseModel):
     material_id: int
     alternative_material_id: int
     priority: int = 1
+    substitution_ratio: float = 1.0
+    max_substitution_percent: int = 100
     is_active: bool = True
     remark: Optional[str] = None
 
@@ -510,3 +512,128 @@ class SupplierConfirmationStatistics(BaseModel):
 class ExtendedStatisticsResponse(StatisticsResponse):
     supplier_confirmation_stats: SupplierConfirmationStatistics
     supplier_bottlenecks: List[SupplierBottleneckAnalysis]
+
+# ============ 替代料分配方案 ============
+
+ALLOCATION_STRATEGIES = ("priority_first", "deadline_first", "fair_share")
+
+class AllocationSolveRequest(BaseModel):
+    material_ids: Optional[List[int]] = None
+    strategy: str = "priority_first"
+    name: Optional[str] = None
+    created_by: Optional[str] = None
+
+class AllocationCompareRequest(BaseModel):
+    material_ids: Optional[List[int]] = None
+
+class AllocationConfirmRequest(BaseModel):
+    version: int
+    confirmed_by: Optional[str] = None
+    item_ids: Optional[List[int]] = None
+
+class AllocationCancelRequest(BaseModel):
+    version: Optional[int] = None
+    item_ids: Optional[List[int]] = None
+
+class AllocationLine(BaseModel):
+    id: int
+    plan_id: int
+    plan_item_id: int
+    production_batch_id: int
+    source_type: str
+    inventory_batch_id: Optional[int] = None
+    purchase_order_id: Optional[int] = None
+    material_id: int
+    is_alternative: bool
+    quantity: int
+    main_equivalent: int
+    status: str
+    material: Optional[Material] = None
+    class Config:
+        from_attributes = True
+
+class AllocationPlanItem(BaseModel):
+    id: int
+    plan_id: int
+    production_batch_id: int
+    vehicle_model_id: int
+    material_id: int
+    required_quantity: int
+    allocated_main_quantity: int
+    allocated_alt_quantity: int
+    unmet_quantity: int
+    status: str
+    item_status: str
+    unmet_reason: Optional[str] = None
+    estimated_delay_days: Optional[int] = None
+    production_batch: Optional[ProductionBatch] = None
+    vehicle_model: Optional[VehicleModel] = None
+    material: Optional[Material] = None
+    lines: List[AllocationLine] = []
+    class Config:
+        from_attributes = True
+
+class AllocationDiffSuggestion(BaseModel):
+    id: int
+    plan_id: int
+    change_type: str
+    description: Optional[str] = None
+    detail: Optional[str] = None
+    status: str
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class AllocationPlan(BaseModel):
+    id: int
+    plan_no: str
+    name: Optional[str] = None
+    strategy: str
+    status: str
+    version: int
+    created_by: Optional[str] = None
+    confirmed_by: Optional[str] = None
+    confirmed_at: Optional[datetime] = None
+    remark: Optional[str] = None
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class AllocationPlanDetail(AllocationPlan):
+    items: List[AllocationPlanItem] = []
+    diff_suggestions: List[AllocationDiffSuggestion] = []
+    class Config:
+        from_attributes = True
+
+class StrategyBatchOutcome(BaseModel):
+    production_batch_id: int
+    batch_no: str
+    vehicle_model_name: str
+    material_id: int
+    material_name: str
+    plan_date: date
+    required_quantity: int
+    status: str
+    unmet_quantity: int
+    estimated_delay_days: Optional[int] = None
+
+class StrategyOutcome(BaseModel):
+    strategy: str
+    fully_covered: int
+    partially_covered: int
+    unmet: int
+    outcomes: List[StrategyBatchOutcome]
+
+class DeliveryDateDiff(BaseModel):
+    production_batch_id: int
+    batch_no: str
+    material_id: int
+    material_name: str
+    plan_date: date
+    by_strategy: dict
+    best_strategy: Optional[str] = None
+    worst_strategy: Optional[str] = None
+
+class AllocationCompareResult(BaseModel):
+    strategies: List[StrategyOutcome]
+    delivery_diffs: List[DeliveryDateDiff]
