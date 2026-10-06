@@ -258,6 +258,19 @@ class SupplierConfirmationBatch(Base):
 
     confirmation = relationship("SupplierConfirmation", back_populates="batches")
 
+class AlternativeRatio(Base):
+    """替代料换算比例与替代上限（按替代关系配置）"""
+    __tablename__ = "alternative_ratios"
+    id = Column(Integer, primary_key=True, index=True)
+    alternative_id = Column(Integer, ForeignKey("alternative_materials.id"), unique=True, nullable=False)
+    substitution_ratio = Column(Float, nullable=False, default=1.0)
+    max_share = Column(Float, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    alternative = relationship("AlternativeMaterial", foreign_keys=[alternative_id])
+
 class SupplierShortageImpact(Base):
     __tablename__ = "supplier_shortage_impacts"
     id = Column(Integer, primary_key=True, index=True)
@@ -274,4 +287,72 @@ class SupplierShortageImpact(Base):
     confirmation = relationship("SupplierConfirmation", back_populates="shortage_impacts")
     production_batch = relationship("ProductionBatch")
     vehicle_model = relationship("VehicleModel")
+    material = relationship("Material")
+
+class AllocationPlan(Base):
+    """主料/替代料有限库存分配方案（计划员确认后冻结）"""
+    __tablename__ = "allocation_plans"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_no = Column(String(50), unique=True, index=True, nullable=False)
+    scope_material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    status = Column(String(20), default="draft", nullable=False)
+    strategy = Column(String(30), default="priority_due_date", nullable=False)
+    solver_version = Column(Integer, default=1, nullable=False)
+    created_by = Column(String(50))
+    confirmed_by = Column(String(50))
+    confirmed_at = Column(DateTime(timezone=True))
+    cancelled_by = Column(String(50))
+    cancelled_at = Column(DateTime(timezone=True))
+    cancel_reason = Column(String(300))
+    snapshot = Column(Text)
+    strategy_comparison = Column(Text)
+    remark = Column(Text)
+    version = Column(Integer, default=1, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    scope_material = relationship("Material", foreign_keys=[scope_material_id])
+    items = relationship("AllocationPlanItem", back_populates="plan", cascade="all, delete-orphan")
+    diffs = relationship("AllocationDiff", back_populates="plan", cascade="all, delete-orphan")
+
+class AllocationPlanItem(Base):
+    """方案中单个生产批次、单个需求物料、单个供应来源的分配明细"""
+    __tablename__ = "allocation_plan_items"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("allocation_plans.id"), nullable=False)
+    production_batch_id = Column(Integer, ForeignKey("production_batches.id"), nullable=False)
+    vehicle_model_id = Column(Integer, ForeignKey("vehicle_models.id"), nullable=False)
+    requirement_material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    source_type = Column(String(20), nullable=False)
+    source_id = Column(Integer, nullable=False)
+    source_material_id = Column(Integer, ForeignKey("materials.id"), nullable=False)
+    alternative_id = Column(Integer, ForeignKey("alternative_materials.id"))
+    allocated_quantity = Column(Integer, nullable=False)
+    equivalent_quantity = Column(Integer, nullable=False)
+    available_date = Column(Date)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    plan = relationship("AllocationPlan", back_populates="items")
+    production_batch = relationship("ProductionBatch")
+    vehicle_model = relationship("VehicleModel")
+    requirement_material = relationship("Material", foreign_keys=[requirement_material_id])
+    source_material = relationship("Material", foreign_keys=[source_material_id])
+
+class AllocationDiff(Base):
+    """冻结方案与最新库存/供应承诺之间的差异建议（只建议，不改写）"""
+    __tablename__ = "allocation_diffs"
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("allocation_plans.id"), nullable=False)
+    production_batch_id = Column(Integer, ForeignKey("production_batches.id"))
+    diff_type = Column(String(30), nullable=False)
+    source_type = Column(String(20))
+    source_id = Column(Integer)
+    material_id = Column(Integer, ForeignKey("materials.id"))
+    quantity_change = Column(Integer, default=0)
+    detail = Column(String(500))
+    status = Column(String(20), default="suggested")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    plan = relationship("AllocationPlan", back_populates="diffs")
+    production_batch = relationship("ProductionBatch")
     material = relationship("Material")

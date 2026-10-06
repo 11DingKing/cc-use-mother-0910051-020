@@ -190,26 +190,24 @@ class SupplierConfirmationService:
 
         from app.crud.alternative import crud_alternative_material, crud_alternative_restriction
         from app.crud.purchase import crud_inventory_batch as inv_batch
-        alternatives_data: Dict[int, Dict] = {}
+        all_alt_rules = crud_alternative_material.get_alternatives_for_material(db, material_id)
+        # 替代料库存池全局共享、实时扣减，避免多批次重复承诺同一库存
+        alt_stock_live: Dict[int, int] = {
+            alt.alternative_material_id: inv_batch.get_total_stock(db, alt.alternative_material_id)
+            for alt in all_alt_rules
+        }
+        allowed_alts_for_model: Dict[int, List[dict]] = {}
         for vm_id in model_bom_quantity:
-            alts = crud_alternative_material.get_alternatives_for_material(db, material_id)
-            available_alts = []
-            total_alt_qty = 0
-            for alt in alts:
+            allowed = []
+            for alt in all_alt_rules:
                 if crud_alternative_restriction.is_alternative_allowed(db, alt.id, vm_id):
-                    alt_stock = inv_batch.get_total_stock(db, alt.alternative_material_id)
-                    if alt_stock > 0:
-                        available_alts.append({
-                            "alternative_id": alt.id,
-                            "material_id": alt.alternative_material_id,
-                            "stock": alt_stock,
-                            "priority": alt.priority
-                        })
-                        total_alt_qty += alt_stock
-            alternatives_data[vm_id] = {
-                "available": available_alts,
-                "total_stock": total_alt_qty
-            }
+                    allowed.append({
+                        "alternative_id": alt.id,
+                        "material_id": alt.alternative_material_id,
+                        "priority": alt.priority
+                    })
+            allowed.sort(key=lambda a: a["priority"])
+            allowed_alts_for_model[vm_id] = allowed
 
         impacts: List[SupplierShortageImpact] = []
         remaining_shortage = shortage_qty
@@ -227,11 +225,20 @@ class SupplierConfirmationService:
                 pool.consume(required_qty, batch.plan_date)
                 continue
 
-            alt_data = alternatives_data.get(vm_id, {})
-            total_alt_stock = alt_data.get("total_stock", 0)
+            alt_options = allowed_alts_for_model.get(vm_id, [])
             shortfall = required_qty - available_on_time
 
-            if total_alt_stock >= shortfall:
+            # 实时扣减车型允许的替代料库存：先前批次已占用的部分不能再用于本批次
+            alt_remaining = shortfall
+            for alt in alt_options:
+                if alt_remaining <= 0:
+                    break
+                take = min(alt_remaining, alt_stock_live.get(alt["material_id"], 0))
+                if take > 0:
+                    alt_stock_live[alt["material_id"]] -= take
+                    alt_remaining -= take
+
+            if alt_remaining <= 0:
                 pool.consume(available_on_time, batch.plan_date)
                 continue
 

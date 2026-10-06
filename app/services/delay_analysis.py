@@ -101,27 +101,27 @@ class DelayAnalysisService:
             -b.vehicle_model.priority if b.vehicle_model else 0
         ))
 
-        alternatives_data: Dict[int, Dict] = {}
+        # 替代料按"替代关系 + 车型允许范围"过滤；库存池全局共享并随批次分配实时扣减，
+        # 避免多个批次各自看到同一份静态库存而被重复判定为可按期生产
+        all_alternatives = crud_alternative_material.get_alternatives_for_material(db, material_id)
+        alt_stock_live: Dict[int, int] = {
+            alt.alternative_material_id:
+                crud_inventory_batch.get_total_stock(db, alt.alternative_material_id)
+            for alt in all_alternatives
+        }
+        alternatives_for_model: Dict[int, List[dict]] = {}
         for vm_id in model_bom_quantity:
-            alts = crud_alternative_material.get_alternatives_for_material(db, material_id)
-            available_alts = []
-            total_alt_qty = 0
-            for alt in alts:
+            allowed = []
+            for alt in all_alternatives:
                 if crud_alternative_restriction.is_alternative_allowed(db, alt.id, vm_id):
-                    alt_stock = crud_inventory_batch.get_total_stock(db, alt.alternative_material_id)
-                    if alt_stock > 0:
-                        available_alts.append({
-                            "alternative_id": alt.id,
-                            "material_id": alt.alternative_material_id,
-                            "material_name": alt.alternative_material.name if alt.alternative_material else "未知",
-                            "stock": alt_stock,
-                            "priority": alt.priority
-                        })
-                        total_alt_qty += alt_stock
-            alternatives_data[vm_id] = {
-                "available": available_alts,
-                "total_stock": total_alt_qty
-            }
+                    allowed.append({
+                        "alternative_id": alt.id,
+                        "material_id": alt.alternative_material_id,
+                        "material_name": alt.alternative_material.name if alt.alternative_material else "未知",
+                        "priority": alt.priority
+                    })
+            allowed.sort(key=lambda a: a["priority"])
+            alternatives_for_model[vm_id] = allowed
 
         class MaterialPool:
             def __init__(self, initial_stock: int, in_transit: List[dict]):
@@ -183,10 +183,7 @@ class DelayAnalysisService:
                 return None
 
         pool = MaterialPool(current_stock, adjusted_in_transit)
-        for vm_id, alt_data in alternatives_data.items():
-            for alt in alt_data["available"]:
-                if alt["material_id"] not in pool.alt_stock:
-                    pool.alt_stock[alt["material_id"]] = alt["stock"]
+        pool.alt_stock = dict(alt_stock_live)
 
         affected_batches: List[ProductionBatch] = []
         analysis_details = []
@@ -218,18 +215,20 @@ class DelayAnalysisService:
                 analysis_details.append(batch_detail)
                 continue
 
-            alt_data = alternatives_data.get(vm_id, {})
-            total_alt_stock = alt_data.get("total_stock", 0)
+            alt_options = alternatives_for_model.get(vm_id, [])
             shortfall = required_qty - available_on_time
 
-            if total_alt_stock >= shortfall:
+            # 实时计算该车型允许的替代料剩余总量（已被先前批次占用的部分不再可用）
+            alt_remaining_total = sum(
+                pool.alt_stock.get(a["material_id"], 0) for a in alt_options
+            )
+
+            if alt_remaining_total >= shortfall:
                 consumed_main, main_details = pool.consume(available_on_time, batch.plan_date)
                 remaining_alt_need = required_qty - consumed_main
 
                 alt_consumed_details = []
-                alts_available = alt_data.get("available", [])
-                alts_available.sort(key=lambda a: a["priority"])
-                for alt in alts_available:
+                for alt in alt_options:
                     if remaining_alt_need <= 0:
                         break
                     alt_id = alt["material_id"]
@@ -248,6 +247,35 @@ class DelayAnalysisService:
                 batch_detail["alternative_used"] = alt_consumed_details
                 analysis_details.append(batch_detail)
                 continue
+
+            # 替代料不足：记录落选原因
+            if shortfall > 0:
+                rejected = []
+                for alt_raw in crud_alternative_material.get_alternatives_for_material(db, material_id):
+                    allowed = any(a["alternative_id"] == alt_raw.id for a in alt_options)
+                    remaining = pool.alt_stock.get(alt_raw.alternative_material_id, 0)
+                    mat_name = alt_raw.alternative_material.name if alt_raw.alternative_material else "未知"
+                    if not allowed:
+                        rejected.append({
+                            "alternative_material_id": alt_raw.alternative_material_id,
+                            "alternative_material_name": mat_name,
+                            "reason": "该车型不允许使用此替代料"
+                        })
+                    elif remaining < shortfall:
+                        rejected.append({
+                            "alternative_material_id": alt_raw.alternative_material_id,
+                            "alternative_material_name": mat_name,
+                            "available_quantity": remaining,
+                            "reason": (
+                                f"替代料剩余仅{remaining}，不足缺口{shortfall}"
+                                + ("（部分已被先前批次占用）"
+                                   if remaining < crud_inventory_batch.get_total_stock(
+                                       db, alt_raw.alternative_material_id)
+                                   else "")
+                            )
+                        })
+                if rejected:
+                    batch_detail["rejected_alternatives"] = rejected
 
             earliest_date = pool.get_earliest_available_date(required_qty, batch.plan_date)
             if earliest_date and earliest_date > batch.plan_date:

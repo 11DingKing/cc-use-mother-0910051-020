@@ -510,3 +510,187 @@ class SupplierConfirmationStatistics(BaseModel):
 class ExtendedStatisticsResponse(StatisticsResponse):
     supplier_confirmation_stats: SupplierConfirmationStatistics
     supplier_bottlenecks: List[SupplierBottleneckAnalysis]
+
+
+# ==================== 替代料比例 ====================
+
+class AlternativeRatioBase(BaseModel):
+    alternative_id: int
+    substitution_ratio: float = 1.0
+    max_share: Optional[float] = None
+    is_active: bool = True
+
+class AlternativeRatioCreate(AlternativeRatioBase):
+    pass
+
+class AlternativeRatioUpsert(BaseModel):
+    substitution_ratio: Optional[float] = None
+    max_share: Optional[float] = None
+    is_active: Optional[bool] = None
+
+class AlternativeRatio(AlternativeRatioBase):
+    id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    class Config:
+        from_attributes = True
+
+
+# ==================== 替代料分配方案 ====================
+
+class AllocationItemResult(BaseModel):
+    """单个批次对单个需求物料的分配汇总"""
+    production_batch_id: int
+    production_batch_no: str
+    vehicle_model_id: int
+    vehicle_model_name: str
+    plan_date: date
+    batch_priority: int
+    requirement_material_id: int
+    requirement_material_code: str
+    requirement_material_name: str
+    required_quantity: int
+    allocated_equivalent: int
+    shortage_quantity: int
+    on_time: bool
+    fulfillable_date: Optional[date] = None
+    sources: List[dict] = []
+    status: str
+    reason: Optional[str] = None
+    rejected_reasons: List[dict] = []
+
+class AllocationSourceView(BaseModel):
+    source_type: str
+    source_id: int
+    source_material_id: int
+    source_material_code: str
+    source_material_name: str
+    available_date: Optional[date] = None
+    total_quantity: int
+    remaining_quantity: int
+    held_quantity: int
+
+class StrategyOutcome(BaseModel):
+    strategy: str
+    strategy_name: str
+    satisfied_batch_count: int
+    unsatisfied_batch_count: int
+    total_shortage_quantity: int
+    weighted_delay_days: float
+    results: List[AllocationItemResult]
+
+class StrategyImpactBatch(BaseModel):
+    production_batch_id: int
+    production_batch_no: str
+    base_status: str
+    alt_status: str
+    base_on_time: bool
+    alt_on_time: bool
+    base_shortage: int
+    alt_shortage: int
+    base_fulfillable_date: Optional[date] = None
+    alt_fulfillable_date: Optional[date] = None
+
+class StrategySummary(BaseModel):
+    strategy: str
+    strategy_name: str
+    satisfied_batch_count: int
+    unsatisfied_batch_count: int
+    total_shortage_quantity: int
+    weighted_delay_days: float
+
+class StrategyComparison(BaseModel):
+    base_strategy: str
+    compared_strategy: str
+    impacts: List[StrategyImpactBatch]
+    summaries: List[StrategySummary] = []
+
+class AllocationSolveRequest(BaseModel):
+    material_id: int
+    strategy: str = "priority_due_date"
+    production_batch_ids: Optional[List[int]] = None
+    include_supplier_commitments: bool = True
+    created_by: Optional[str] = None
+    plan_no: Optional[str] = None
+    compare_strategies: bool = True
+
+class AllocationDiffItem(BaseModel):
+    id: Optional[int] = None
+    production_batch_id: Optional[int] = None
+    production_batch_no: Optional[str] = None
+    diff_type: str
+    source_type: Optional[str] = None
+    source_id: Optional[int] = None
+    material_id: Optional[int] = None
+    material_code: Optional[str] = None
+    quantity_change: int = 0
+    detail: Optional[str] = None
+    status: str = "suggested"
+    class Config:
+        from_attributes = True
+
+class AllocationPlanItemOut(BaseModel):
+    id: int
+    production_batch_id: int
+    vehicle_model_id: int
+    requirement_material_id: int
+    source_type: str
+    source_id: int
+    source_material_id: int
+    alternative_id: Optional[int] = None
+    allocated_quantity: int
+    equivalent_quantity: int
+    available_date: Optional[date] = None
+    class Config:
+        from_attributes = True
+
+class AllocationPlanBase(BaseModel):
+    id: int
+    plan_no: str
+    scope_material_id: int
+    status: str
+    strategy: str
+    solver_version: int
+    created_by: Optional[str] = None
+    confirmed_by: Optional[str] = None
+    confirmed_at: Optional[datetime] = None
+    cancelled_by: Optional[str] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_reason: Optional[str] = None
+    remark: Optional[str] = None
+    version: int
+    created_at: datetime
+    class Config:
+        from_attributes = True
+
+class AllocationPlanDetail(AllocationPlanBase):
+    items: List[AllocationPlanItemOut] = []
+    diffs: List[AllocationDiffItem] = []
+    results: Optional[List[AllocationItemResult]] = None
+    strategy_comparison: Optional[StrategyComparison] = None
+    sources: Optional[List[AllocationSourceView]] = None
+
+class AllocationSolveResponse(BaseModel):
+    plan: AllocationPlanBase
+    strategy: str
+    results: List[AllocationItemResult]
+    sources: List[AllocationSourceView]
+    strategy_comparison: Optional[StrategyComparison] = None
+    warning: Optional[str] = None
+
+class AllocationConfirmRequest(BaseModel):
+    plan_id: int
+    confirmed_by: str
+    accepted_batch_ids: Optional[List[int]] = None
+    remark: Optional[str] = None
+
+class AllocationCancelRequest(BaseModel):
+    cancelled_by: str
+    reason: Optional[str] = None
+
+class AllocationRecheckResponse(BaseModel):
+    plan_id: int
+    plan_status: str
+    has_changes: bool
+    diffs: List[AllocationDiffItem]
+    remark: Optional[str] = None
